@@ -1,76 +1,151 @@
+#![allow(warnings)]
+use dotenv::dotenv;
 use rand;
 use rand::Rng;
-use std::env;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use serde_json::Value;
 use std::fs;
 
-fn main() {
-    let contents = fs::read_to_string("george_mac.txt").expect("read File failed");
-    // let line_count = contents.lines().count();
-    //
-    // println!("There are {} lines in the file", line_count);
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenv().ok();
 
-    let args: Vec<String> = env::args().collect();
+    let book = read_file("george_mac.txt");
+    let split_string = "------------";
+    let contents = split_books(split_string.to_owned(), &book);
 
-    let contents = contents
-        .lines()
-        .filter(|line| !line.is_empty())
-        .filter(|line| !line.contains("CHAPTER"))
-        .collect::<Vec<&str>>()
-        .join("\n");
+    let prompt = "You are a poet and avid reader of George MacDonald.
+        Make sure to respond only in quotes from the provided book. 
+        Identify quotes that evoke strong emotions or imagery and that could stand alone without commentary.
+        Look for earnestness.
+        Select excerpts that encapsulate the essence of the book's themes in a concise and impactful way.
+        Take a deep breath and carefully choose 20 poetic or surprising quotes from this book.";
 
-    let contents = contents
-        .split(".")
-        .flat_map(|sen| sen.split(";"))
-        .collect::<Vec<&str>>();
+    let book = contents[29];
+    book.lines().take(2).for_each(|line| println!("{}", line));
+    println!("Length: {}", book.chars().count());
 
-    if args.len() > 1 {
-        let search_term = &args[1];
+    let response = call_gemini(&prompt.to_string(), &book.to_string()).await?;
 
-        // let mut prev_line = " ";
-        // for line in contents.lines() {
-        //     if line.contains(search_term) {
-        //         print!("{}\n{}\n\n", prev_line, line);
-        //     }
-        // }
-        // prev_line = &line;
-        let found_lines = contents
-            .into_iter()
-            .filter(|line| line.contains(search_term))
-            .collect::<Vec<&str>>();
+    let texts = match extract_text_from_response(&response) {
+        Ok(texts) => {
+            for text in &texts {
+                println!("First: \n {} \n\n", text);
+            }
+            texts
+        }
+        Err(e) => {
+            println!("Error extractin: {}", e);
+            Vec::new()
+        }
+    };
 
-        let rand_number = rand::thread_rng().gen_range(0..found_lines.len());
+    let prompt = "You are a poetic and literary Tweeter.
+        Choose the 4 quotes you find most interesting out of the following that you would send in a up to 280 character tweet.
+        Find quotes that could stand alone as poetic reflections.
+        Sort them in order of level of interestingness.
+        Respond only with the quotes and without commentary";
 
-        println!("{}.\n", found_lines[rand_number]);
-    } else {
-        // let mut rand_section = contents.lines().skip(rand_number).take(4).collect::<Vec<&str>>();
-        //
-        // rand_section[0] = rand_section[0].split(".").last().unwrap();
-        //
-        // rand_section[3] = rand_section[3].split(".").next().unwrap();
-        //
-        // println!("{}\n", rand_section.join("\n"));
-        //
-        //
-        let contents = contents
-            .into_iter()
-            .filter(|line| !line.is_empty())
-            .filter(|line| !line.contains("CHAPTER"))
-            .collect::<Vec<&str>>();
+    let response = call_gemini(&prompt.to_string(), &texts[0].to_string()).await?;
 
-        let rand_number = rand::thread_rng().gen_range(0..contents.len());
+    // println!("Response 2: \n{}", response);
+    let _texts = match extract_text_from_response(&response) {
+        Ok(texts) => {
+            for text in &texts {
+                println!("Second: \n {} \n\n", text);
+            }
+            texts
+        }
+        Err(e) => {
+            println!("Error extractin: {}", e);
+            Vec::new()
+        }
+    };
 
-        println!("{}.\n", contents[rand_number]);
-    }
+    Ok(())
 }
 
-fn read_file(path: &str) {
-    fs::read_to_string(path).expect("read File failed");
+async fn call_gemini(prompt: &String, book: &String) -> Result<String, Box<dyn std::error::Error>> {
+    let api_key = std::env::var("API_KEY").expect("API_KEY must be set");
+
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={}",
+        api_key
+    );
+
+    let client = Client::new();
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&json!({
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "text": format!("{},\n\n{}\n\n,{}", prompt, book, prompt)
+                        }
+                    ]
+                }
+            ]
+        }))
+        .send()
+        .await?;
+
+    let body = response.text().await?;
+    Ok(body)
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct GeminiResponse {
+    candidates: Vec<Candidate>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Candidate {
+    content: Content,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Content {
+    parts: Vec<Part>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Part {
+    text: String,
+}
+
+fn extract_text_from_response(
+    response_body: &str,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let response: GeminiResponse = serde_json::from_str(response_body)?;
+
+    let texts: Vec<String> = response
+        .candidates
+        .into_iter()
+        .flat_map(|candidate| candidate.content.parts)
+        .map(|part| part.text)
+        .collect();
+
+    Ok(texts)
+}
+
+fn read_file(path: &str) -> String {
+    fs::read_to_string(path).expect("read File failed")
 }
 
 fn generate_random_tweet(sentences: Vec<&str>) {
     //TODO
 }
 
-fn generate_tweet_from_word(sentences: Vec<&str>, word: &str){
+fn generate_tweet_from_word(sentences: Vec<&str>, word: &str) {
     //TODO
+}
+
+fn split_books(split_str: String, books: &String) -> Vec<&str> {
+    // first line is book title - into hashmap?
+    books.split(&split_str).collect()
 }
