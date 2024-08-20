@@ -1,7 +1,8 @@
-use std::fs;
+use clap::{Arg, Command};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use reqwest::Client;
+use std::fs;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct GeminiResponse {
@@ -47,7 +48,10 @@ pub fn split_books(split_str: String, books: &String) -> Vec<&str> {
     books.split(&split_str).collect()
 }
 
-pub async fn call_gemini(prompt: &String, book: &String) -> Result<Vec::<String>, Box<dyn std::error::Error>> {
+pub async fn call_gemini(
+    prompt: &String,
+    book: &String,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let api_key = get_env_var_or_fallback("GOOGLE_API_KEY", "API_KEY")?;
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={}",
@@ -89,7 +93,6 @@ pub async fn call_gemini(prompt: &String, book: &String) -> Result<Vec::<String>
     };
 
     Ok(texts)
-
 }
 
 pub fn get_env_var_or_fallback(var1: &str, var2: &str) -> Result<String, std::env::VarError> {
@@ -100,4 +103,31 @@ pub fn get_env_var_or_fallback(var1: &str, var2: &str) -> Result<String, std::en
             Err(e) => Err(e),
         },
     }
+}
+
+pub fn extract_args() -> clap::ArgMatches{
+
+    let matches = Command::new("gmac_tweet")
+        .version("0.3")
+        .author("Thomas ttarabbia@gmail.com")
+        .about("Generate Tweets from an author")
+        .arg(
+            Arg::new("keywords")
+                .short('k')
+                .long("keywords")
+                .value_parser(clap::value_parser!(String))
+                .num_args(1..)
+                .help("Pass keywords to focus the quotes from the book"),
+        )
+        .arg(
+            Arg::new("character")
+                .short('c')
+                .long("character")
+                .value_parser(clap::value_parser!(String))
+                .help("Pass a character from the book to focus the quotes"),
+        )
+        .get_matches();
+
+    matches
+
 }
