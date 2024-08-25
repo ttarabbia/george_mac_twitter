@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;
 use std::fs;
+use reqwest::Client;
+use serde_json::json;
 
 use utils::*;
 
@@ -15,28 +17,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut matches = extract_args();
 
-    let book = read_file("george_mac.txt");
-    let split_string = "------------";
-    let contents = split_books(split_string.to_owned(), &book);
-    let book = contents[43];
+    // let book = read_file("george_mac.txt");
+    // let split_string = "------------";
+    // let contents = split_books(split_string.to_owned(), &book);
+    // let book = contents[43];
+    //
+    // book.lines().take(2).for_each(|line| println!("{}", line));
+    // println!("Length: {}", book.chars().count());
+    //
+    // let mut tweet = Vec::<String>::new();
 
-    book.lines().take(2).for_each(|line| println!("{}", line));
-    println!("Length: {}", book.chars().count());
+    // if let Some(keywords) = matches.get_many::<String>("keywords") {
+    //     let keywords_str = keywords
+    //         .map(|s| s.as_str())
+    //         .collect::<Vec<&str>>()
+    //         .join(" and ");
+    //     tweet = generate_tweet_from_word(&book, &keywords_str).await?;
+    //
+    // } else if let Some(character) = matches.get_one::<String>("character") {
+    //     tweet = generate_tweet_from_character(&book, &character).await?;
+    // } else {
+    //     tweet = generate_random_tweet(&book).await?;
+    // }
+    let tweet = ["test".to_owned(), "test2".to_owned()].to_vec();
 
-    let mut tweet = Vec::<String>::new();
+    let bearer_token = get_env_var_or_fallback("BEARER_TOKEN", "TWITTER_BEARER_TOKEN")?;
 
-    if let Some(keywords) = matches.get_many::<String>("keywords") {
-        let keywords_str = keywords
-            .map(|s| s.as_str())
-            .collect::<Vec<&str>>()
-            .join(" and ");
-        tweet = generate_tweet_from_word(&book, &keywords_str).await?;
+    let consumer_key = get_env_var_or_fallback("CONSUMER_KEY", "TWITTER_CONSUMER_KEY")?;
+    let consumer_secret = get_env_var_or_fallback("CONSUMER_SECRET", "TWITTER_CONSUMER_SECRET")?;
+    let access_token = get_env_var_or_fallback("ACCESS_TOKEN", "TWITTER_ACCESS_TOKEN")?;
+    let access_token_secret = get_env_var_or_fallback("ACCESS_TOKEN_SECRET", "TWITTER_ACCESS_TOKEN_SECRET")?;
 
-    } else if let Some(character) = matches.get_one::<String>("character") {
-        tweet = generate_tweet_from_character(&book, &character).await?;
-    } else {
-        tweet = generate_random_tweet(&book).await?;
-    }
+    post_tweet_oauth1(&consumer_key, &consumer_secret, &access_token, &access_token_secret, &tweet[0]).await?;
 
     Ok(())
 }
@@ -112,3 +124,4 @@ async fn generate_tweet_from_character(
 
     Ok(response)
 }
+

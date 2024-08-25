@@ -1,4 +1,5 @@
 use clap::{Arg, Command};
+use oauth1::Token;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -105,8 +106,7 @@ pub fn get_env_var_or_fallback(var1: &str, var2: &str) -> Result<String, std::en
     }
 }
 
-pub fn extract_args() -> clap::ArgMatches{
-
+pub fn extract_args() -> clap::ArgMatches {
     let matches = Command::new("gmac_tweet")
         .version("0.3")
         .author("Thomas ttarabbia@gmail.com")
@@ -129,5 +129,60 @@ pub fn extract_args() -> clap::ArgMatches{
         .get_matches();
 
     matches
-
 }
+
+
+pub async fn post_tweet_oauth1(
+    consumer_key: &str,
+    consumer_secret: &str,
+    access_token: &str,
+    access_token_secret: &str,
+    tweet_text: &str
+) -> Result<(), Box<dyn std::error::Error>> {
+
+    let token = Token::new(access_token.to_string(), access_token_secret.to_string());
+    let oauth = OAuth1::new(consumer_key.to_string(), consumer_secret.to_string(), token);
+
+    let client = Client::new();
+    let url = "https://api.twitter.com/1.1/statuses/update.json";
+
+    let response = client.post(url)
+        .header("Authorization", oauth.to_header())
+        .form(&[("status", tweet_text)])
+        .send()
+        .await?;
+
+    if response.status().is_success() {
+        println!("Tweet posted successfully!");
+    } else {
+        println!("Failed to post tweet. Status: {}", response.status());
+        println!("Response: {}", response.text().await?);
+    }
+
+    Ok(())
+}
+
+
+pub async fn post_tweet(bearer_token: &str, tweet_text: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let client = Client::new();
+    let url = "https://api.twitter.com/2/tweets";
+    println!("{}",&tweet_text);
+
+    let response = client.post(url)
+        .bearer_auth(bearer_token)
+        .json(&serde_json::json!({
+            "text": tweet_text
+        }))
+        .send()
+        .await?;
+
+    if response.status().is_success() {
+        println!("Tweet posted successfully!");
+    } else {
+        println!("Failed to post tweet. Status: {}", response.status());
+        println!("Response: {}", response.text().await?);
+    }
+
+    Ok(())
+}
+
