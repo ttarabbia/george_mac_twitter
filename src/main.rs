@@ -17,41 +17,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut matches = extract_args();
 
-    // let book = read_file("george_mac.txt");
-    // let split_string = "------------";
-    // let contents = split_books(split_string.to_owned(), &book);
-    // let book = contents[43];
-    //
-    // book.lines().take(2).for_each(|line| println!("{}", line));
-    // println!("Length: {}", book.chars().count());
-    //
-    // let mut tweet = Vec::<String>::new();
+    let book = read_file("george_mac.txt");
+    let split_string = "------------";
+    let contents = split_books(split_string.to_owned(), &book);
+    let book = contents[1];
 
-    // if let Some(keywords) = matches.get_many::<String>("keywords") {
-    //     let keywords_str = keywords
-    //         .map(|s| s.as_str())
-    //         .collect::<Vec<&str>>()
-    //         .join(" and ");
-    //     tweet = generate_tweet_from_word(&book, &keywords_str).await?;
-    //
-    // } else if let Some(character) = matches.get_one::<String>("character") {
-    //     tweet = generate_tweet_from_character(&book, &character).await?;
-    // } else {
-    //     tweet = generate_random_tweet(&book).await?;
-    // }
-    let tweet = ["test".to_owned(), "test2".to_owned()].to_vec();
+    let book_title = book.lines().nth(1).unwrap();
+    println!("Title: {}", &book_title);
+    println!("Length: {}", book.chars().count());
 
-    let bearer_token = get_env_var_or_fallback("BEARER_TOKEN", "TWITTER_BEARER_TOKEN")?;
+    let mut tweet = Vec::<String>::new();
 
-    let consumer_key = get_env_var_or_fallback("CONSUMER_KEY", "TWITTER_CONSUMER_KEY")?;
-    let consumer_secret = get_env_var_or_fallback("CONSUMER_SECRET", "TWITTER_CONSUMER_SECRET")?;
-    let access_token = get_env_var_or_fallback("ACCESS_TOKEN", "TWITTER_ACCESS_TOKEN")?;
-    let access_token_secret = get_env_var_or_fallback("ACCESS_TOKEN_SECRET", "TWITTER_ACCESS_TOKEN_SECRET")?;
+    if let Some(keywords) = matches.get_many::<String>("keywords") {
+        let keywords_str = keywords
+            .map(|s| s.as_str())
+            .collect::<Vec<&str>>()
+            .join(" and ");
+        tweet = generate_tweet_from_word(&book, &keywords_str).await?;
+        // tweet = generate_fake_story(&book).await?;
 
-    post_tweet_oauth1(&consumer_key, &consumer_secret, &access_token, &access_token_secret, &tweet[0]).await?;
+    } else if let Some(character) = matches.get_one::<String>("character") {
+        tweet = generate_tweet_from_character(&book, &character).await?;
+    } else {
+        tweet = generate_random_tweet(&book).await?;
+    }
+
+    auth_and_tweet(&tweet[0], &book_title).await?;
 
     Ok(())
 }
+
+
+async fn generate_fake_story(book: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let prompt = 
+    "You are a funny and witty writer. 
+        Make a short entertaining story out of passages from only this book. 
+        Make sure the story you craft is not related to the book's story at all. 
+        Emphasize a satirical theme that criticizes hard work.  
+        Make sure there is a clear narrative thread and a conflict that's resolved by the end of the story. 
+        Do not add new material, only use sentences from this book, separated by | that string together into a witty story, 400-600 words";
+
+    let response = call_gemini(&prompt.to_string(), &book.to_string()).await?;
+
+
+    Ok(response)
+}
+
 
 async fn generate_random_tweet(book: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let prompt = "You are a poet and avid reader of George MacDonald.
@@ -64,7 +75,7 @@ async fn generate_random_tweet(book: &str) -> Result<Vec<String>, Box<dyn std::e
     let response = call_gemini(&prompt.to_string(), &book.to_string()).await?;
 
     let prompt = "You are a poetic and literary Tweeter.
-        Choose the 4 portions you find most interesting out of the following that you would send in a up to 280 character tweet.
+        Choose 4 portions you find most interesting out of the following that you would send in a up to 280 character tweet.
         Find snippets that could stand alone as poetic reflections.
         Sort them in order of level of interestingness.
         Respond only with the text from the book and without commentary";
@@ -90,7 +101,7 @@ async fn generate_tweet_from_word(
     let response = call_gemini(&prompt.to_string(), &book.to_string()).await?;
 
     let prompt = format!("You are a poetic and literary Tweeter.
-        Choose the 4 excerpts you find most interesting out of the following that you would send in a up to 280 character tweet.
+        Choose 1 excerpt you find most interesting out of the following.
         Find portions that could stand alone as poetic reflections.
         Sort them in order of level of closeness to the theme {}.
         Respond only with the text from the book and without commentary", word);

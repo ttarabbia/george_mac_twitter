@@ -1,9 +1,10 @@
 use clap::{Arg, Command};
-use oauth1::Token;
+use oauth2::RefreshToken;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::fs;
+use std::time::{Duration, SystemTime};
+use std::{borrow::Cow, collections::HashMap, env, fs};
 
 #[derive(Debug, Deserialize, Serialize)]
 struct GeminiResponse {
@@ -131,58 +132,121 @@ pub fn extract_args() -> clap::ArgMatches {
     matches
 }
 
+use std::io::{self, Write};
 
-pub async fn post_tweet_oauth1(
-    consumer_key: &str,
-    consumer_secret: &str,
-    access_token: &str,
-    access_token_secret: &str,
-    tweet_text: &str
+use reqwest::Url;
+use twitter_v2::authorization::{Oauth2Client, Oauth2Token, Scope};
+use twitter_v2::oauth2::{AuthorizationCode, PkceCodeChallenge, PkceCodeVerifier};
+use twitter_v2::TwitterApi;
+
+pub async fn auth_and_tweet(tweet: &String, book_title: &str) -> Result<(), Box<dyn std::error::Error>> {
+    dotenv::dotenv().ok();
+
+    // Get client_id and client_secret from env variables
+    let client_id = env::var("TWITTER_OAUTH_CLIENT_ID").expect("TWITTER_OAUTH_CLIENT_ID not set");
+    let client_secret =
+        env::var("TWITTER_OAUTH_CLIENT_SECRET").expect("TWITTER_OAUTH_CLIENT_SECRET not set");
+
+    // Use a dummy callback URL
+    let callback_url = Url::parse("http://localhost:8080/redirect").unwrap();
+
+    // Create Twitter OAuth2 client
+    let twitter_oauth2_client = Oauth2Client::new(client_id, client_secret, callback_url);
+
+    // Set scopes
+    let scopes = [Scope::TweetRead, Scope::TweetWrite, Scope::UsersRead];
+
+    // Generate auth URL
+    let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
+    let (auth_url, _state) = twitter_oauth2_client.auth_url(challenge, scopes);
+
+    println!("Please open this URL in your browser:");
+    println!("{}", auth_url);
+    println!("After authorizing, you will be redirected to a blank page. Copy the 'code' parameter from the URL.");
+
+    print!("Enter the code: ");
+    io::stdout().flush()?;
+
+    let mut code = String::new();
+    io::stdin().read_line(&mut code)?;
+    let code = code.trim();
+
+    let authorization_code = AuthorizationCode::new(code.to_string());
+    let code_verifier = PkceCodeVerifier::new(verifier.secret().to_string());
+
+    // Exchange the code for a token
+    let token_result = twitter_oauth2_client
+        .request_token(authorization_code, code_verifier)
+        .await?;
+
+    let mut oauth2_token = token_result.access_token().clone();
+    let refresh_token = token_result.refresh_token().cloned();
+    let expires_at = SystemTime::now().checked_add(token_result.expires());
+
+    println!("Access token: {:?}", oauth2_token);
+    println!("Refresh token: {:?}", refresh_token);
+    println!("Expires at: {:?}", expires_at);
+
+    refresh_token_if_expired(
+        &twitter_oauth2_client,
+        &mut oauth2_token.secret().to_string(),
+        refresh_token,
+        &mut expires_at,
+    ).await?;
+
+    println!("Successfully obtained OAuth2 token!");
+
+    // Post a tweet
+    let tweet_text = format!("{}, from: {}", tweet, book_title).to_string();
+
+    println!("Length: {}", tweet_text.chars().count());
+
+    if !tweet_text.is_empty() {
+        post_tweet(&oauth2_token, &tweet_text).await?;
+    }
+
+    Ok(())
+}
+
+async fn post_tweet(
+    oauth2_token: &Oauth2Token,
+    tweet_text: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    println!("OAuth2 token: {:?}", oauth2_token);
+    let api = TwitterApi::new(oauth2_token.clone());
+    println!("Posting tweet: {}", tweet_text);
 
-    let token = Token::new(access_token.to_string(), access_token_secret.to_string());
-    let oauth = OAuth1::new(consumer_key.to_string(), consumer_secret.to_string(), token);
-
-    let client = Client::new();
-    let url = "https://api.twitter.com/1.1/statuses/update.json";
-
-    let response = client.post(url)
-        .header("Authorization", oauth.to_header())
-        .form(&[("status", tweet_text)])
-        .send()
-        .await?;
-
-    if response.status().is_success() {
-        println!("Tweet posted successfully!");
+    if let Err(e) = api.post_tweet().text(tweet_text.to_string()).send().await {
+        eprintln!("Failed to post tweet: {}", e);
     } else {
-        println!("Failed to post tweet. Status: {}", response.status());
-        println!("Response: {}", response.text().await?);
+        println!("Tweet posted successfully!");
     }
 
     Ok(())
 }
 
-
-pub async fn post_tweet(bearer_token: &str, tweet_text: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let client = Client::new();
-    let url = "https://api.twitter.com/2/tweets";
-    println!("{}",&tweet_text);
-
-    let response = client.post(url)
-        .bearer_auth(bearer_token)
-        .json(&serde_json::json!({
-            "text": tweet_text
-        }))
-        .send()
-        .await?;
-
-    if response.status().is_success() {
-        println!("Tweet posted successfully!");
+async fn refresh_token_if_expired(
+    twitter_oauth2_client: &Oauth2Client,
+    access_token: &mut String,
+    refresh_token: Option<RefreshToken>,
+    expires_at: &mut SystemTime,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let now = SystemTime::now();
+    if now >= *expires_at {
+        if let Some(refresh_token) = refresh_token {
+            let new_token_result = twitter_oauth2_client
+                .refresh_token(&RefreshToken::new(refresh_token))
+                .await?;
+            
+            *access_token = new_token_result.access_token().secret().to_string();
+            *expires_at = SystemTime::now() + new_token_result.expires().unwrap_or(Duration::from_secs(3600));
+            println!("Token refreshed! New access token: {}", access_token);
+        } else {
+            println!("No refresh token available. You need to re-authenticate.");
+            return Err("Token expired and no refresh token available".into());
+        }
     } else {
-        println!("Failed to post tweet. Status: {}", response.status());
-        println!("Response: {}", response.text().await?);
+        println!("Token is still valid.");
     }
-
     Ok(())
 }
-
