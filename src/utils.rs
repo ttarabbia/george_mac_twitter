@@ -1,10 +1,15 @@
 use clap::{Arg, Command};
-use oauth2::RefreshToken;
-use reqwest::Client;
+// use oauth2::RefreshToken;
+use time::OffsetDateTime;   
+use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::time::{Duration, SystemTime};
 use std::{borrow::Cow, collections::HashMap, env, fs};
+use std::io::{self, Write};
+use twitter_v2::authorization::{Oauth2Client, Oauth2Token, Scope};
+use twitter_v2::oauth2::{AuthorizationCode, PkceCodeChallenge, PkceCodeVerifier};
+use twitter_v2::TwitterApi;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct GeminiResponse {
@@ -132,72 +137,15 @@ pub fn extract_args() -> clap::ArgMatches {
     matches
 }
 
-use std::io::{self, Write};
 
-use reqwest::Url;
-use twitter_v2::authorization::{Oauth2Client, Oauth2Token, Scope};
-use twitter_v2::oauth2::{AuthorizationCode, PkceCodeChallenge, PkceCodeVerifier};
-use twitter_v2::TwitterApi;
-
-pub async fn auth_and_tweet(tweet: &String, book_title: &str) -> Result<(), Box<dyn std::error::Error>> {
-    dotenv::dotenv().ok();
-
-    // Get client_id and client_secret from env variables
-    let client_id = env::var("TWITTER_OAUTH_CLIENT_ID").expect("TWITTER_OAUTH_CLIENT_ID not set");
-    let client_secret =
-        env::var("TWITTER_OAUTH_CLIENT_SECRET").expect("TWITTER_OAUTH_CLIENT_SECRET not set");
-
-    // Use a dummy callback URL
-    let callback_url = Url::parse("http://localhost:8080/redirect").unwrap();
-
-    // Create Twitter OAuth2 client
-    let twitter_oauth2_client = Oauth2Client::new(client_id, client_secret, callback_url);
-
-    // Set scopes
-    let scopes = [Scope::TweetRead, Scope::TweetWrite, Scope::UsersRead];
-
-    // Generate auth URL
-    let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
-    let (auth_url, _state) = twitter_oauth2_client.auth_url(challenge, scopes);
-
-    println!("Please open this URL in your browser:");
-    println!("{}", auth_url);
-    println!("After authorizing, you will be redirected to a blank page. Copy the 'code' parameter from the URL.");
-
-    print!("Enter the code: ");
-    io::stdout().flush()?;
-
-    let mut code = String::new();
-    io::stdin().read_line(&mut code)?;
-    let code = code.trim();
-
-    let authorization_code = AuthorizationCode::new(code.to_string());
-    let code_verifier = PkceCodeVerifier::new(verifier.secret().to_string());
-
-    // Exchange the code for a token
-    let token_result = twitter_oauth2_client
-        .request_token(authorization_code, code_verifier)
-        .await?;
-
-    let mut oauth2_token = token_result.access_token().clone();
-    let refresh_token = token_result.refresh_token().cloned();
-    let expires_at = SystemTime::now().checked_add(token_result.expires());
-
-    println!("Access token: {:?}", oauth2_token);
-    println!("Refresh token: {:?}", refresh_token);
-    println!("Expires at: {:?}", expires_at);
-
-    refresh_token_if_expired(
-        &twitter_oauth2_client,
-        &mut oauth2_token.secret().to_string(),
-        refresh_token,
-        &mut expires_at,
-    ).await?;
-
-    println!("Successfully obtained OAuth2 token!");
+pub async fn auth_and_tweet(
+    tweet: &String,
+    book_title: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let oauth2_token = auth().await?;
 
     // Post a tweet
-    let tweet_text = format!("{}, from: {}", tweet, book_title).to_string();
+    let tweet_text = format!("{}\n        -{}", tweet, book_title).to_string();
 
     println!("Length: {}", tweet_text.chars().count());
 
@@ -225,28 +173,73 @@ async fn post_tweet(
     Ok(())
 }
 
-async fn refresh_token_if_expired(
-    twitter_oauth2_client: &Oauth2Client,
-    access_token: &mut String,
-    refresh_token: Option<RefreshToken>,
-    expires_at: &mut SystemTime,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let now = SystemTime::now();
-    if now >= *expires_at {
-        if let Some(refresh_token) = refresh_token {
-            let new_token_result = twitter_oauth2_client
-                .refresh_token(&RefreshToken::new(refresh_token))
-                .await?;
-            
-            *access_token = new_token_result.access_token().secret().to_string();
-            *expires_at = SystemTime::now() + new_token_result.expires().unwrap_or(Duration::from_secs(3600));
-            println!("Token refreshed! New access token: {}", access_token);
-        } else {
-            println!("No refresh token available. You need to re-authenticate.");
-            return Err("Token expired and no refresh token available".into());
-        }
-    } else {
-        println!("Token is still valid.");
-    }
-    Ok(())
+async fn auth() -> Result<Oauth2Token, Box<dyn std::error::Error>> {
+    dotenv::dotenv().ok();
+
+    // Get client_id and client_secret from env variables
+    let client_id = env::var("TWITTER_OAUTH_CLIENT_ID").expect("TWITTER_OAUTH_CLIENT_ID not set");
+    let client_secret =
+        env::var("TWITTER_OAUTH_CLIENT_SECRET").expect("TWITTER_OAUTH_CLIENT_SECRET not set");
+
+    // Use a dummy callback URL
+    let callback_url = Url::parse("http://localhost:8080/redirect").unwrap();
+
+    // Create Twitter OAuth2 client
+    let twitter_oauth2_client = Oauth2Client::new(client_id, client_secret, callback_url);
+
+    // Set scopes
+    let scopes = [Scope::TweetRead, Scope::TweetWrite, Scope::UsersRead, Scope::OfflineAccess];
+
+    // Generate auth URL
+    let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
+    let (auth_url, _state) = twitter_oauth2_client.auth_url(challenge, scopes);
+
+    println!("Please open this URL in your browser:");
+    println!("{}", auth_url);
+    println!("After authorizing, you will be redirected to a blank page. Copy the 'code' parameter from the URL.");
+
+    print!("Enter the code: ");
+    io::stdout().flush()?;
+
+    let mut code = String::new();
+    io::stdin().read_line(&mut code)?;
+    let code = code.trim();
+
+    let authorization_code = AuthorizationCode::new(code.to_string());
+    let code_verifier = PkceCodeVerifier::new(verifier.secret().to_string());
+
+    // Exchange the code for a token
+    let mut token_result = twitter_oauth2_client
+        .request_token(authorization_code, code_verifier)
+        .await?;
+
+
+    let mut oauth2_token = token_result.access_token().clone();
+    // twitter_oauth2_client.revoke_token(oauth2_token.clone().into()).await?;
+    println!("oauth2 token {:?}", oauth2_token);
+    println!("token_result {:?}", token_result);
+    println!("is_expired {:?}", &token_result.is_expired());
+    // twitter_oauth2_client.refresh_token_if_expired(&mut token_result).await?;
+    // let refresh_token = token_result.refresh_token().expect("should have a refresh token");
+    // let expires_at = SystemTime::now().checked_add(token_result.expires());
+    // let expires_at = OffsetDateTime::now_utc() + token_result.expires();
+
+    // println!("Access token: {:?}", oauth2_token);
+    // println!("Refresh token: {:?}", refresh_token);
+    // println!("Expires at: {:?}", expires_at);
+
+    // refresh_token_if_expired(
+    //     &twitter_oauth2_client,
+    //     &mut oauth2_token.secret().to_string(),
+    //     refresh_token,
+    //     &mut expires_at,
+    // )
+    // .await?;
+
+    // let token_result = twitter_oauth2_client.refresh_token(&refresh_token).await?;
+    println!("Successfully obtained OAuth2 token!");
+     
+
+    Ok(token_result)
 }
+

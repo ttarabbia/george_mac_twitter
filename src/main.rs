@@ -42,7 +42,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tweet = generate_random_tweet(&book).await?;
     }
 
-    auth_and_tweet(&tweet[0], &book_title).await?;
+    let tweet = tweet[0].lines().next().unwrap().to_string();
+    println!("\n\nTweeting: {}", &tweet);
+    auth_and_tweet(&tweet, &book_title).await?;
 
     Ok(())
 }
@@ -91,20 +93,20 @@ async fn generate_tweet_from_word(
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let prompt = format!("You are a poet and avid reader of George MacDonald.
         Look for earnestness.
-        Find excerpt that have to do with {}
-        Select excerpts that encapsulate the essence of the book's themes in a concise and impactful way.
-        Each section should be unique. 
+        Think carefully about which portions strike you. 
+        Find excerpts that have to do with {}
         Identify portions and sentences that evoke strong emotions or imagery and that could stand alone without commentary.
         Make sure to respond only in excerpts or portions from the provided book. 
-        Take a deep breath and carefully choose 20 poetic excerpts that have to do with {} from this book.", word, word);
+        Find excerpts that have to do with {}
+        Take a deep breath and carefully choose 20 poetic excerpts that have to do with {} from this book.",word, word, word);
 
     let response = call_gemini(&prompt.to_string(), &book.to_string()).await?;
 
     let prompt = format!("You are a poetic and literary Tweeter.
         Choose 1 excerpt you find most interesting out of the following.
         Find portions that could stand alone as poetic reflections.
-        Sort them in order of level of closeness to the theme {}.
-        Respond only with the text from the book and without commentary", word);
+        Make sure it has to do with the theme: {}.
+        Respond only with the text from the book and without commentary and do not number them.", word);
 
     let response = call_gemini(&prompt.to_string(), &response[0].to_string()).await?;
 
